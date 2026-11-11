@@ -1,8 +1,5 @@
 # 🎁 TetGift — Nền tảng quà tặng Tết trực tuyến
 
-> **Môn học:** SWP391 – KyBlock3  
-> **Mã lớp:** DTV214  
-> **Nhóm:** KyBlock3
 
 TetGift là hệ thống thương mại điện tử chuyên về quà tặng dịp Tết, hỗ trợ đặt hàng trực tuyến, báo giá tuỳ chỉnh (custom quotation), thanh toán VnPay, chat AI với Gemini, và bản đồ định vị cửa hàng.
 
