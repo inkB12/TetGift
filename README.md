@@ -263,9 +263,3 @@ npm run dev
 | 🖼️ Media | Upload ảnh sản phẩm qua Cloudinary |
 | 🏪 Kho hàng | Quản lý tồn kho, lịch sử nhập/xuất |
 | 🎉 Khuyến mãi | Mã giảm giá, chương trình ưu đãi |
-
-
-
----
-
-*Dự án phát triển trong khuôn khổ môn SWP391 – FPT University*
