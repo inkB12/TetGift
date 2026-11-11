@@ -1,0 +1,294 @@
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using TetGift.BackgroundJobs;
+using TetGift.BLL.Common;
+using TetGift.BLL.Hubs;
+using TetGift.BLL.Interfaces;
+using TetGift.BLL.Services;
+using TetGift.BLL.Settings;
+using TetGift.DAL.Context;
+using TetGift.DAL.Interfaces;
+using TetGift.DAL.Repositories;
+using TetGift.DAL.UnitOfWork;
+using TetGift.Filters;
+using TetGift.Middlewares;
+using Microsoft.Playwright;
+using System.IO;
+
+namespace TetGift
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+            var builder = WebApplication.CreateBuilder(args);
+
+            // ConnectionString
+            builder.Services.AddDbContext<DatabaseContext>(options =>
+                options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+            // --- PHẦN THÊM CỦA MÌNH: ĐĂNG KÝ CORS SERVICE ---
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowReactApp",
+                    policy =>
+                    {
+                        policy.WithOrigins("http://localhost:5173", "http://14.225.207.221", "https://localhost:7056/") // Khớp với origin của React (Vite)
+                              .AllowAnyHeader()
+                              .AllowAnyMethod()
+                              .AllowCredentials();
+                    });
+            });
+
+            builder.Services.AddControllers(options =>
+            {
+                options.Filters.Add<ApiResponseWrapperFilter>();
+            });
+
+            // Cấu hình Jwt
+            var jwtKey = builder.Configuration["Jwt:Key"] ?? throw new Exception("Missing config: Jwt:Key");
+            var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+            var jwtAudience = builder.Configuration["Jwt:Audience"];
+
+            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                .AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuerSigningKey = true,
+                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+
+                        ValidateIssuer = !string.IsNullOrWhiteSpace(jwtIssuer),
+                        ValidIssuer = jwtIssuer,
+
+                        ValidateAudience = !string.IsNullOrWhiteSpace(jwtAudience),
+                        ValidAudience = jwtAudience,
+
+                        ValidateLifetime = true,
+                        ClockSkew = TimeSpan.FromSeconds(30)
+                    };
+
+                    options.Events = new JwtBearerEvents
+                    {
+                        // 401
+                        OnChallenge = async context =>
+                        {
+                            context.HandleResponse();
+
+                            if (!context.Response.HasStarted)
+                            {
+                                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                                context.Response.ContentType = "application/json";
+
+                                var payload = new ApiResponse<object?>
+                                {
+                                    Status = 401,
+                                    Msg = "Unauthorized.",
+                                    Data = null
+                                };
+
+                                var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+                                {
+                                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                                });
+
+                                await context.Response.WriteAsync(json);
+                            }
+                        },
+
+                        // 403
+                        OnForbidden = async context =>
+                        {
+                            if (!context.Response.HasStarted)
+                            {
+                                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                                context.Response.ContentType = "application/json";
+
+                                var payload = new ApiResponse<object?>
+                                {
+                                    Status = 403,
+                                    Msg = "Forbidden.",
+                                    Data = null
+                                };
+
+                                var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+                                {
+                                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                                });
+
+                                await context.Response.WriteAsync(json);
+                            }
+                        },
+
+                        OnAuthenticationFailed = context =>
+                        {
+                            return Task.CompletedTask;
+                        }
+                    };
+                });
+
+
+            builder.Services.AddAuthorization();
+
+            #region Redis
+
+            // Đọc cấu hình từ appsettings.json
+            var redisConfig = builder.Configuration.GetSection("RedisOptions");
+
+            builder.Services.AddStackExchangeRedisCache(options =>
+            {
+                // Sử dụng ConnectionString đã khai báo ở trên
+                options.Configuration = redisConfig["ConnectionString"];
+
+                // InstanceName giúp phân biệt các key của project này với project khác trên cùng 1 database Redis
+                options.InstanceName = redisConfig["InstanceName"];
+            });
+
+            builder.Services.AddScoped<ICacheService, CacheService>();
+
+            #endregion
+
+            // Add services to the container.
+            builder.Services.AddEndpointsApiExplorer();
+            builder.Services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "TetGift API", Version = "v1" });
+
+                c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+                {
+                    Name = "Authorization",
+                    Type = SecuritySchemeType.Http,
+                    Scheme = "bearer",
+                    BearerFormat = "JWT",
+                    In = ParameterLocation.Header,
+                    Description = "Nhập: Bearer {your_jwt_token}"
+                });
+
+                c.AddSecurityRequirement(new OpenApiSecurityRequirement
+                {
+                    {
+                        new OpenApiSecurityScheme
+                        {
+                            Reference = new OpenApiReference
+                            {
+                                Type = ReferenceType.SecurityScheme,
+                                Id = "Bearer"
+                            }
+                        },
+                        Array.Empty<string>()
+                    }
+                });
+            });
+
+            // Đăng ký Background Services
+            builder.Services.AddHostedService<PendingAccountCleanupService>();
+            builder.Services.AddHostedService<AutoConfirmDeliveryService>();
+            builder.Services.AddHostedService<ExpiredStockCleanupService>();
+
+            // Đăng ký các Repository
+            builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+            builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
+
+            // Đăng ký các external Service
+            builder.Services.AddScoped<IEmailTemplateRenderer, FileEmailTemplateRenderer>();
+            builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+            builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>((sp, http) =>
+            {
+                var cfg = sp.GetRequiredService<IConfiguration>();
+                var apiKey = cfg["Resend:ApiKey"];
+
+                http.BaseAddress = new Uri("https://api.resend.com/");
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                    http.DefaultRequestHeaders.Authorization =
+                        new AuthenticationHeaderValue("Bearer", apiKey);
+            });
+
+            // Đăng ký các Service
+            builder.Services.AddScoped<IAuthService, AuthService>();
+            builder.Services.AddScoped<IProductConfigService, ProductConfigService>();
+            builder.Services.AddScoped<IProductCategoryService, ProductCategoryService>();
+            builder.Services.AddScoped<IConfigDetailService, ConfigDetailService>();
+            builder.Services.AddScoped<IProductService, ProductService>();
+            builder.Services.AddScoped<IProductDetailService, ProductDetailService>();
+            builder.Services.AddScoped<IPromotionService, PromotionService>();
+            builder.Services.AddScoped<IInventoryService, InventoryService>();
+            builder.Services.AddScoped<IQuotationService, QuotationService>();
+            builder.Services.AddScoped<IOrderFromQuotationService, OrderFromQuotationService>();
+            builder.Services.AddScoped<ICartService, CartService>();
+            builder.Services.AddScoped<IOrderService, OrderService>();
+            builder.Services.AddScoped<IPaymentService, PaymentService>();
+            builder.Services.AddScoped<IDashboardService, DashboardService>();
+            builder.Services.AddScoped<IBlogService, BlogService>();
+            builder.Services.AddScoped<IAccountService, AccountService>();
+            builder.Services.AddScoped<IChatService, ChatService>();
+            builder.Services.AddScoped<IAdminAccountService, AdminAccountService>();
+            builder.Services.AddScoped<IStoreLocationService, StoreLocationService>();
+            builder.Services.AddScoped<IDirectionsService, DirectionsService>();
+            builder.Services.AddScoped<IAccountAddressService, AccountAddressService>();
+            builder.Services.AddScoped<IAccountPromotionService, AccountPromotionService>();
+            builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+            builder.Services.AddScoped<IFeedbackService, FeedbackService>();
+            builder.Services.AddScoped<IContactService, ContactService>();
+            builder.Services.AddScoped<IStatisticService, StatisticService>();
+            builder.Services.AddScoped<IDashboardComparisonService, DashboardComparisonService>();
+            builder.Services.AddScoped<IDashboardRankingService, DashboardRankingService>();
+            builder.Services.AddSignalR();
+            // Đăng ký cấu hình CloudinarySettings
+            builder.Services.Configure<CloudinarySettings>(builder.Configuration.GetSection("CloudinarySettings"));
+
+            // Đăng ký MediaService
+            builder.Services.AddScoped<IMediaService, MediaService>();
+
+
+            // --- CHATBOT SERVICES ---
+            builder.Services.AddScoped<IProductRepository, ProductRepository>();
+            builder.Services.AddHttpClient();
+            builder.Services.AddScoped<GeminiChatService>();
+
+            var app = builder.Build();
+
+            // Configure the HTTP request pipeline.
+            app.UseSwagger();
+            app.UseSwaggerUI();
+
+            // Only redirect to HTTPS in production with SSL configured
+            if (!app.Environment.IsProduction())
+            {
+                app.UseHttpsRedirection();
+            }
+
+            // --- PHẦN THÊM CỦA MÌNH: SỬ DỤNG CORS MIDDLEWARE ---
+            // Phải đặt sau UseRouting và trước UseAuthentication/Authorization
+            app.UseStaticFiles();
+
+            app.UseRouting();
+
+            app.UseCors("AllowReactApp");
+
+            app.MapHub<ChatHub>("/hubs/chat");
+
+            //Middleware
+            app.UseMiddleware<ExceptionMiddleware>();
+
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.UseStaticFiles();
+            app.MapControllers();
+
+            var browserPath = Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH") ?? "/ms-playwright";
+
+            if (!Directory.Exists(browserPath) || Directory.GetDirectories(browserPath).Length == 0)
+            {
+                Microsoft.Playwright.Program.Main(new[] { "install", "chromium" });
+            }
+
+            app.Run();
+        }
+    }
+}

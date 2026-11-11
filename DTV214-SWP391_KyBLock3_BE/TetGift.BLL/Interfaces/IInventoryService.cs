@@ -1,0 +1,26 @@
+﻿using TetGift.BLL.Dtos;
+
+namespace TetGift.BLL.Interfaces
+{
+    public interface IInventoryService
+    {
+        // Báo cáo tồn kho thấp 
+        Task<IEnumerable<LowStockReportDto>> GetLowStockReportAsync(int threshold);
+
+        // --- THÊM CRUD MỚI ---
+        Task<IEnumerable<StockDto>> GetAllStocksAsync();
+        Task<StockDto> GetStockByIdAsync(int id);
+        Task<StockDto> CreateStockAsync(CreateStockRequest req);
+        Task UpdateStockAsync(int id, UpdateStockRequest req);
+        Task DeleteStockAsync(int id);
+
+        Task<IEnumerable<StockDto>> GetStocksByProductIdAsync(int productId);
+
+        Task<IEnumerable<StockMovementDto>> GetMovementsByDetailAsync(int orderId, int productId);
+
+
+        // --- MỚI: Lấy lịch sử biến động kho ---
+        Task<IEnumerable<StockMovementDto>> GetAllMovementsAsync();
+
+    }
+}
