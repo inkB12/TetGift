@@ -1,0 +1,34 @@
+# Build outputs
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.swp
+*.bak
+
+# Secrets - NEVER commit these files!
+appsettings.Development.json
+appsettings.Production.json
+appsettings.Staging.json
+**/appsettings.Development.json
+**/appsettings.Production.json
+**/appsettings.Staging.json
+
+# .NET
+*.dll
+*.exe
+*.pdb
+packages/
+.nuget/
+
+# Node
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
