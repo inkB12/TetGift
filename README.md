@@ -267,30 +267,7 @@ npm run dev
 | 🏪 Kho hàng | Quản lý tồn kho, lịch sử nhập/xuất |
 | 🎉 Khuyến mãi | Mã giảm giá, chương trình ưu đãi |
 
----
 
-## 🔐 Quản lý Secret (quan trọng!)
-
-> **Không bao giờ commit file chứa secret lên Git!**
-
-| File | Mục đích | Git status |
-|------|----------|------------|
-| `appsettings.json` | Template (chỉ placeholder) | ✅ Được commit |
-| `appsettings.Development.json` | Secret local dev | ⛔ Gitignored |
-| `appsettings.Production.json` | Secret production | ⛔ Gitignored |
-
-Liên hệ team lead để lấy file `appsettings.Development.json` với giá trị thật.
-
----
-
-## 👥 Team
-
-| Vai trò | Thành viên |
-|---------|-----------|
-| Backend Dev | — |
-| Frontend Dev | — |
-| Database | — |
-| Team Lead | — |
 
 ---
 
